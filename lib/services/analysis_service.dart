@@ -2,72 +2,21 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
-
-class AnalysisResult {
-  final double rollOvershoot;
-  final double pitchOvershoot;
-  final double rollRiseTime;
-  final double pitchRiseTime;
-  final double rollSteadyState;
-  final double pitchSteadyState;
-  final double rollPeakValue;
-  final double pitchPeakValue;
-  final int rollSegments;
-  final int pitchSegments;
-  final String status;
-
-  AnalysisResult({
-    required this.rollOvershoot,
-    required this.pitchOvershoot,
-    required this.rollRiseTime,
-    required this.pitchRiseTime,
-    required this.rollSteadyState,
-    required this.pitchSteadyState,
-    required this.rollPeakValue,
-    required this.pitchPeakValue,
-    required this.rollSegments,
-    required this.pitchSegments,
-    required this.status,
-  });
-
-  bool isRollGood() => rollOvershoot < 10;
-  bool isPitchGood() => pitchOvershoot < 10;
-
-  String getRecommendation() {
-    if (rollOvershoot > 15 || pitchOvershoot > 15) {
-      return "超调过高，建议增加D值";
-    }
-    if (rollOvershoot > 10 || pitchOvershoot > 10) {
-      return "超调略高，可微调D或降P";
-    }
-    if (rollRiseTime > 150 || pitchRiseTime > 150) {
-      return "响应偏慢，可增加FF值";
-    }
-    return "PID配置良好";
-  }
-}
+import '../models/analysis_result.dart';
 
 class LogDecoder {
   static Future<List<Map<String, dynamic>>> decodeBBL(String filePath) async {
     final file = File(filePath);
     final bytes = await file.readAsBytes();
 
-    // 简化解码：假设已经是CSV格式或需要转换
-    // 实际BBL解码需要更复杂的逻辑
-
     return _parseLogBytes(bytes);
   }
 
   static List<Map<String, dynamic>> _parseLogBytes(Uint8List bytes) {
-    // 这里实现简化的日志解析
-    // 实际需要完整的黑盒解码算法
-
     List<Map<String, dynamic>> data = [];
 
-    // 尝试解析为CSV
     String content = String.fromCharCodes(bytes);
     if (content.contains('time,')) {
-      // CSV格式
       data = _parseCSV(content);
     }
 
@@ -80,10 +29,8 @@ class LogDecoder {
 
     if (lines.isEmpty) return data;
 
-    // 解析头部
     List<String> headers = lines[0].split(',');
 
-    // 解析数据行
     for (int i = 1; i < lines.length && i < 100000; i++) {
       String line = lines[i].trim();
       if (line.isEmpty) continue;
@@ -95,7 +42,6 @@ class LogDecoder {
         String header = headers[j].trim();
         String value = values[j].trim();
 
-        // 转换数值
         double? numValue = double.tryParse(value);
         row[header] = numValue ?? value;
       }
@@ -130,21 +76,18 @@ class StepResponseAnalyzer {
       );
     }
 
-    // 提取陀螺仪数据
     List<double> gyroRoll = _extractColumn(logData, 'gyroADC[0]');
     List<double> gyroPitch = _extractColumn(logData, 'gyroADC[1]');
     List<double> setpointRoll = _extractColumn(logData, 'setpoint[0]');
     List<double> setpointPitch = _extractColumn(logData, 'setpoint[1]');
 
     if (gyroRoll.isEmpty || setpointRoll.isEmpty) {
-      // 尝试其他列名
       gyroRoll = _extractColumn(logData, 'axisP[0]');
       gyroPitch = _extractColumn(logData, 'axisP[1]');
       setpointRoll = _extractColumn(logData, 'rcCommand[0]');
       setpointPitch = _extractColumn(logData, 'rcCommand[1]');
     }
 
-    // 分析阶跃响应
     Map<String, dynamic> rollResult = _analyzeAxis(gyroRoll, setpointRoll);
     Map<String, dynamic> pitchResult = _analyzeAxis(gyroPitch, setpointPitch);
 
@@ -181,24 +124,20 @@ class StepResponseAnalyzer {
       return {'overshoot': 0, 'riseTime': 0, 'steadyState': 1, 'peakValue': 1, 'segments': 0};
     }
 
-    // 维纳反卷积阶跃响应分析
     int n = gyro.length;
 
-    // 预处理：去除均值
     double gyroMean = _calculateMean(gyro);
     double setpointMean = _calculateMean(setpoint);
 
     List<double> gyroCentered = gyro.map((v) => v - gyroMean).toList();
     List<double> setpointCentered = setpoint.map((v) => v - setpointMean).toList();
 
-    // 找阶跃段
     List<int> stepIndices = _findSteps(setpointCentered);
 
     if (stepIndices.isEmpty) {
       return {'overshoot': 0, 'riseTime': 0, 'steadyState': 1, 'peakValue': 1, 'segments': 0};
     }
 
-    // 分析每个阶跃
     List<double> overshoots = [];
     List<double> riseTimes = [];
     List<double> steadyStates = [];
@@ -209,22 +148,17 @@ class StepResponseAnalyzer {
     for (int stepIdx in stepIndices) {
       if (stepIdx + durationSamples > n) continue;
 
-      // 提取阶跃段数据
       List<double> stepGyro = gyroCentered.sublist(stepIdx, stepIdx + durationSamples);
       List<double> stepSetpoint = setpointCentered.sublist(stepIdx, stepIdx + durationSamples);
 
-      // 计算阶跃响应
       double maxSetpoint = stepSetpoint.reduce(max).abs();
       if (maxSetpoint < minInput) continue;
 
-      // 找峰值和稳态
       double peak = stepGyro.reduce((a, b) => a.abs() > b.abs() ? a : b).abs();
       double steady = _calculateMean(stepGyro.sublist(durationSamples - 50, durationSamples)).abs();
 
-      // 计算超调
       double overshoot = peak > steady ? ((peak - steady) / steady * 100) : 0;
 
-      // 计算上升时间 (10%-90%)
       double riseTime = _calculateRiseTime(stepGyro, steady);
 
       overshoots.add(overshoot);
@@ -248,7 +182,7 @@ class StepResponseAnalyzer {
 
   static List<int> _findSteps(List<double> data) {
     List<int> steps = [];
-    double threshold = 50; // 阶跃阈值
+    double threshold = 50;
 
     for (int i = 1; i < data.length - 1; i++) {
       double prev = data[i - 1].abs();

@@ -1,5 +1,3 @@
-import 'package:flutter/material.dart';
-
 class AnalysisResult {
   final double rollOvershoot;
   final double pitchOvershoot;
@@ -47,12 +45,10 @@ class AnalysisResult {
     List<String> commands = [];
 
     if (rollOvershoot > 10) {
-      double newD = 45;
-      commands.add("set d_roll = ${newD.toInt()}");
+      commands.add("set d_roll = 45");
     }
     if (pitchOvershoot > 10) {
-      double newD = 45;
-      commands.add("set d_pitch = ${newD.toInt()}");
+      commands.add("set d_pitch = 45");
     }
 
     if (commands.isEmpty) {
